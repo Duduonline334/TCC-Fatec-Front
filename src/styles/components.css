@@ -1,0 +1,34 @@
+* {
+   margin: 0 auto;
+   box-sizing: border-box;
+   padding: 0;
+}
+
+.header {
+    background-color: blue;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-direction: row;
+    width: 100%;
+}
+
+.logoTitle{
+    display: flex;
+    flex-direction: row;
+}
+
+@media (max-width: 786px) {
+    .header {
+        height: 50px;
+        
+    }
+
+    .elementsRight {
+        margin: 0 20px;
+    }
+
+    .logoTitle {
+        gap: 10px;
+    }
+}
