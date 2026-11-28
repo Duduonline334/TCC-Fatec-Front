@@ -86,3 +86,5 @@ li {padding: 12px; background: var(--inset); border-radius: 8px;}
   .reading {padding: 20px;}
   .settings button {grid-column: 1/-1; justify-self: end;}
 }
+.history-filters {display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 10px; max-width: 440px; margin-block: 12px;}
+.history-axis {display: flex; justify-content: space-between; color: var(--muted); font-size: .75rem; margin-top: 4px;}

@@ -22,11 +22,17 @@ type Sensor = {
   umid_max: DecimalValue;
 };
 type Sample = {
-  id: number;
   date: string;
-  value_temp: string;
-  value_umid: string;
+  value_temp: number;
+  value_umid: number;
+  samples: number;
 };
+type Period = "day" | "month";
+const today = () => new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" });
+const slot = (date: string, period: Period) =>
+  period === "day" ? Number(date.slice(11, 13)) : Number(date.slice(8, 10)) - 1;
+const slotLabel = (index: number, period: Period) =>
+  period === "day" ? String(index).padStart(2, "0") + "h" : String(index + 1).padStart(2, "0");
 const limits = {
   temp_min: "Temperatura mínima (°C)",
   temp_max: "Temperatura máxima (°C)",
@@ -37,36 +43,45 @@ function Chart({
   rows,
   field,
   label,
+  period,
+  lastSlot,
 }: {
   rows: Sample[];
   field: "value_temp" | "value_umid";
   label: string;
+  period: Period;
+  lastSlot: number;
 }) {
-  const values = rows.map((r) => Number(r[field])).reverse(),
+  const chronological = [...rows].reverse();
+  const values = chronological.map((r) => r[field]),
     lo = Math.min(...values),
     hi = Math.max(...values);
   const points = values.map((v, i) => [
-    4 + (292 * i) / Math.max(1, values.length - 1),
+    4 + (292 * slot(chronological[i].date, period)) / lastSlot,
     hi === lo ? 40 : 76 - (72 * (v - lo)) / (hi - lo),
   ]);
   return (
     <figure className={field === "value_temp" ? "temperature" : "humidity"}>
       <figcaption>
-        {label} · {lo.toLocaleString("pt-BR")} a {hi.toLocaleString("pt-BR")}
+        {label} · {lo.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} a {hi.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}
       </figcaption>
       <svg
         viewBox="0 0 300 80"
         role="img"
-        aria-label={label + " por ordem de coleta"}
+        aria-label={label + (period === "day" ? " por hora" : " por dia")}
       >
-        <polyline
-          points={points.map((p) => p.join(",")).join(" ")}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        />
-        <circle cx={points.at(-1)?.[0]} cy={points.at(-1)?.[1]} r="3" />
+        {points.map(([x, y], i) => {
+          const previous = points[i - 1];
+          const adjacent = previous && slot(chronological[i].date, period) - slot(chronological[i - 1].date, period) === 1;
+          return <g key={chronological[i].date}>
+            {adjacent && <line x1={previous[0]} y1={previous[1]} x2={x} y2={y} stroke="currentColor" strokeWidth="2" />}
+            <circle cx={x} cy={y} r="2.5" />
+          </g>;
+        })}
       </svg>
+      <div className="history-axis" aria-hidden="true">
+        {[0, Math.round(lastSlot / 2), lastSlot].map(i => <span key={i}>{slotLabel(i, period)}</span>)}
+      </div>
     </figure>
   );
 }
@@ -89,6 +104,13 @@ function Detail({ sensor: s, onSave }: { sensor: Sensor; onSave: () => void }) {
       setAckBusy(false);
     }
   }
+  const [period, setPeriod] = useState<Period>("day");
+  const [day, setDay] = useState(today);
+  const [month, setMonth] = useState(() => today().slice(0, 7));
+  const selectedDate = period === "day" ? day : month;
+  const monthEnd = new Date(month + "-01T00:00:00Z");
+  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1, 0);
+  const chartEnd = period === "day" ? 23 : monthEnd.getUTCDate() - 1;
   const [rows, setRows] = useState<Sample[]>([]),
     [historyMsg, setHistoryMsg] = useState("Carregando histórico…"),
     [message, setMessage] = useState("");
@@ -99,23 +121,30 @@ function Detail({ sensor: s, onSave }: { sensor: Sensor; onSave: () => void }) {
       try {
         const r = await api.get<Sample[]>("/sensor/" + s.id + "/history", {
           signal: c.signal,
+          params: { period, date: selectedDate },
         });
         if (!c.signal.aborted) {
           setRows(r.data);
-          setHistoryMsg(r.data.length ? "" : "Ainda não há medições.");
+          setHistoryMsg(r.data.length ? "" : "Nenhuma medição neste período.");
         }
       } catch {
         if (!c.signal.aborted)
           setHistoryMsg("Não foi possível atualizar o histórico.");
       }
-      if (!c.signal.aborted) timer = setTimeout(poll, 5000);
+      if (!c.signal.aborted && selectedDate === (period === "day" ? today() : today().slice(0, 7)))
+        timer = setTimeout(poll, 15000);
     }
     void poll();
     return () => {
       c.abort();
       clearTimeout(timer);
     };
-  }, [s.id]);
+  }, [s.id, period, selectedDate]);
+  function changeHistory(change: () => void) {
+    setRows([]);
+    setHistoryMsg("Carregando histórico…");
+    change();
+  }
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
@@ -181,19 +210,30 @@ function Detail({ sensor: s, onSave }: { sensor: Sensor; onSave: () => void }) {
         />
       </div>
       <section>
-        <h2>Histórico recente</h2>
-        <p>
-          Últimas 120 medições ·{" "}
-          {rows[0]?.date
-            ? "Última coleta: " + new Date(rows[0].date).toLocaleString("pt-BR")
-            : "Aguardando primeira coleta"}
-        </p>
+        <h2>Histórico de medições</h2>
+        <div className="history-filters">
+          <label>Período
+            <select value={period} onChange={e => changeHistory(() => setPeriod(e.target.value as Period))}>
+              <option value="day">Dia</option><option value="month">Mês</option>
+            </select>
+          </label>
+          <label>{period === "day" ? "Data" : "Mês e ano"}
+            <input type={period === "day" ? "date" : "month"} value={selectedDate}
+              max={period === "day" ? today() : today().slice(0, 7)}
+              onChange={e => {
+                const value = e.target.value;
+                if (value && value !== selectedDate)
+                  changeHistory(() => period === "day" ? setDay(value) : setMonth(value));
+              }} />
+          </label>
+        </div>
+        <p>{period === "day" ? "Médias por hora" : "Médias por dia"} · horário de Brasília</p>
         <p role="status">{historyMsg}</p>
         {!!rows.length && (
           <>
             <div className="grid">
-              <Chart rows={rows} field="value_temp" label="Temperatura (°C)" />
-              <Chart rows={rows} field="value_umid" label="Umidade (%)" />
+              <Chart rows={rows} period={period} lastSlot={chartEnd} field="value_temp" label="Temperatura (°C)" />
+              <Chart rows={rows} period={period} lastSlot={chartEnd} field="value_umid" label="Umidade (%)" />
             </div>
             <details>
               <summary>Ver medições</summary>
@@ -201,17 +241,19 @@ function Detail({ sensor: s, onSave }: { sensor: Sensor; onSave: () => void }) {
                 <table>
                   <thead>
                     <tr>
-                      <th>Data e hora</th>
+                      <th>{period === "day" ? "Hora" : "Dia"}</th>
                       <th>°C</th>
                       <th>%</th>
+                      <th>Leituras</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <tr key={r.id}>
-                        <td>{new Date(r.date).toLocaleString("pt-BR")}</td>
-                        <td>{r.value_temp}</td>
-                        <td>{r.value_umid}</td>
+                      <tr key={r.date}>
+                        <td>{slotLabel(slot(r.date, period), period)}</td>
+                        <td>{r.value_temp.toLocaleString("pt-BR", {maximumFractionDigits: 1})}</td>
+                        <td>{r.value_umid.toLocaleString("pt-BR", {maximumFractionDigits: 1})}</td>
+                        <td>{r.samples}</td>
                       </tr>
                     ))}
                   </tbody>
